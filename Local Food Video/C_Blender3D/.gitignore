@@ -1,0 +1,4 @@
+output/frames_*/
+output/stills/
+*.blend1
+__pycache__/

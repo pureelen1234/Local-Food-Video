@@ -1,0 +1,36 @@
+{
+  "title": "건강한 지역먹거리를 우리 식탁 위에 (C안 Blender 3D)",
+  "fps": 24,
+  "render": {
+    "preview": { "width": 960,  "height": 540,  "samples": 8,  "file": "output/preview_540p.mp4" },
+    "final":   { "width": 1920, "height": 1080, "samples": 32, "file": "output/final_1080p.mp4" }
+  },
+  "labels": {
+    "storeName": "춘천지역먹거리직매장",
+    "slogan": "건강한 지역먹거리를 우리 식탁 위에",
+    "sloganLines": ["건강한 지역먹거리를", "우리 식탁 위에"],
+    "storeSign": "오늘 아침, 춘천에서 온 먹거리",
+    "producerTitle": "생산자",
+    "producerName": "(생산자명) 농부님",
+    "producerArea": "춘천",
+    "farmLabel": "춘천 근교 농가",
+    "storeShort": "직매장",
+    "farLabel": "먼 길",
+    "nearLabel": "가까운 길",
+    "carbonLabel": "탄소발자국은 작게",
+    "staffGreeting": "오늘 아침에 들어왔어요!",
+    "consumerReply": "와, 싱싱하다!",
+    "menuIdeas": ["된장찌개?", "샐러드?", "토마토 달걀볶음?"],
+    "themes": ["지역먹거리", "환경", "탄소발자국 저감", "건강한 식탁"]
+  },
+  "scenes": [
+    { "id": "S1_dawn",    "duration": 8,  "subtitle": "춘천의 아침은 밭에서 시작됩니다" },
+    { "id": "S2_farmer",  "duration": 10, "subtitle": "정성으로 흘린 땀, 그 땀이 키운 먹거리" },
+    { "id": "S3_route",   "duration": 8,  "subtitle": "먼 길 대신, 가까운 길로" },
+    { "id": "S4_display", "duration": 9,  "subtitle": "농부의 마음을 그대로 매대 위에" },
+    { "id": "S5_walk",    "duration": 8,  "subtitle": "오늘 저녁엔 뭘 먹을까?" },
+    { "id": "S6_choose",  "duration": 11, "subtitle": "누가, 어디서 길렀는지 아는 먹거리" },
+    { "id": "S7_table",   "duration": 12, "subtitle": "가까운 먹거리, 줄어드는 탄소발자국" },
+    { "id": "S8_slogan",  "duration": 9,  "subtitle": "" }
+  ]
+}

@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Local Food Film</title>
+<style>
+@font-face{font-family:'Noto Sans KR';font-weight:400;src:url(assets/fonts/noto-sans-kr-korean-400-normal.woff2) format('woff2')}
+@font-face{font-family:'Noto Sans KR';font-weight:700;src:url(assets/fonts/noto-sans-kr-korean-700-normal.woff2) format('woff2')}
+@font-face{font-family:'Noto Sans KR';font-weight:800;src:url(assets/fonts/noto-sans-kr-korean-800-normal.woff2) format('woff2')}
+@font-face{font-family:'Noto Sans KR';font-weight:400;src:url(assets/fonts/noto-sans-kr-latin-400-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122,U+2212}
+@font-face{font-family:'Noto Sans KR';font-weight:700;src:url(assets/fonts/noto-sans-kr-latin-700-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122,U+2212}
+@font-face{font-family:'Noto Sans KR';font-weight:800;src:url(assets/fonts/noto-sans-kr-latin-800-normal.woff2) format('woff2');unicode-range:U+0000-00FF,U+2000-206F,U+20AC,U+2122,U+2212}
+html,body{margin:0;padding:0;background:#000;overflow:hidden}
+#stage{position:relative;width:100vw;height:100vh;overflow:hidden;font-family:'Noto Sans KR',sans-serif}
+#stage svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+#sub{position:absolute;left:50%;bottom:6.5%;transform:translateX(-50%);white-space:nowrap;
+  color:#fff;font-weight:700;letter-spacing:-0.02em;background:rgba(34,28,22,.52);
+  border-radius:0.6em;padding:0.32em 0.9em 0.38em;opacity:0}
+#fade{position:absolute;inset:0;background:#000;opacity:0}
+</style>
+</head>
+<body>
+<div id="stage"><div id="layers"></div><div id="sub"></div><div id="fade"></div></div>
+<script>
+/* =========================================================
+   「건강한 지역먹거리를 우리 식탁 위에」 2D 모션그래픽
+   - 장면 시간·자막·문구는 config.json 에서 수정 (코드 수정 불필요)
+   - renderAt(t) 는 t초 시점의 한 프레임을 그림 (결정적 렌더)
+   - 등장인물: CH_Farmer / CH_Staff / CH_Consumer (character 함수 하나로 교체 가능)
+   ========================================================= */
+const W=1920,H=1080;
+let CFG=null,SCENES=[],TOTAL=0;
+
+/* ---------- 수학·색 도우미 ---------- */
+const clamp=(v,a=0,b=1)=>Math.max(a,Math.min(b,v));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const seg=(t,a,b)=>clamp((t-a)/(b-a));
+const ease=x=>{x=clamp(x);return x*x*(3-2*x)};
+const eout=x=>{x=clamp(x);return 1-Math.pow(1-x,3)};
+const eback=x=>{x=clamp(x);const c1=1.70158,c3=c1+1;return 1+c3*Math.pow(x-1,3)+c1*Math.pow(x-1,2)};
+const hx=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+const mix=(a,b,t)=>{const A=hx(a),B=hx(b);t=clamp(t);return '#'+A.map((v,i)=>Math.round(lerp(v,B[i],t)).toString(16).padStart(2,'0')).join('')};
+const dark=(c,k=.18)=>mix(c,'#000000',k);
+const f=n=>(+n).toFixed(1);
+const rnd=i=>{const x=Math.sin(i*12.9898+78.233)*43758.5453;return x-Math.floor(x)};
+function kf(t,keys){
+  if(t<=keys[0][0])return keys[0][1];
+  for(let i=0;i<keys.length-1;i++){const[a,va]=keys[i],[b,vb]=keys[i+1];if(t<=b)return lerp(va,vb,ease((t-a)/(b-a)))}
+  return keys[keys.length-1][1];
+}
+const cam=(inner,s,cx,cy,dx=0,dy=0)=>`<g transform="translate(${f(cx+dx)},${f(cy+dy)}) scale(${s.toFixed(4)}) translate(${-cx},${-cy})">${inner}</g>`;
+const txt=(x,y,str,size,color,weight=700,anchor='middle',extra='')=>`<text x="${f(x)}" y="${f(y)}" font-family="Noto Sans KR" font-weight="${weight}" font-size="${size}" fill="${color}" text-anchor="${anchor}" ${extra}>${str}</text>`;
+const grad=(id,stops,vertical=true)=>`<linearGradient id="${id}" x1="0" y1="0" x2="${vertical?0:1}" y2="${vertical?1:0}">${stops.map(([o,c])=>`<stop offset="${o}" stop-color="${c}"/>`).join('')}</linearGradient>`;
+const glow=(id,c1,c2)=>`<radialGradient id="${id}"><stop offset="0" stop-color="${c1}" stop-opacity=".95"/><stop offset=".35" stop-color="${c2}" stop-opacity=".45"/><stop offset="1" stop-color="${c2}" stop-opacity="0"/></radialGradient>`;
+function ridge(yb,amp,ph,color,op=1){
+  let d=`M0,${H} L0,${yb}`;
+  for(let x=0;x<=W;x+=30){const y=yb-amp*(.55*Math.sin(x*.0035+ph)+.3*Math.sin(x*.009+ph*2.1)+.15*Math.sin(x*.023+ph*3.7)+.4);d+=` L${x},${f(y)}`}
+  return `<path d="${d} L${W},${H} Z" fill="${color}" opacity="${op}"/>`;
+}
+function sparkle(x,y,r,op,c='#fff6b0'){
+  return `<path transform="translate(${f(x)},${f(y)}) scale(${(r/10).toFixed(3)})" d="M0,-10 L2.5,-2.5 L10,0 L2.5,2.5 L0,10 L-2.5,2.5 L-10,0 L-2.5,-2.5Z" fill="${c}" opacity="${f(op)}"/>`;
+}
+
+/* ---------- 농산물 ---------- */
+function veg(type,x,y,s=1,rot=0){
+  let g='';
+  switch(type){
+  case 'cabbage':g=`<circle r="40" fill="#6fb85a"/><circle r="30" cx="4" cy="4" fill="#9bd47a"/><path d="M-28,-8 Q0,-40 28,-8" stroke="#4f9a41" stroke-width="5" fill="none"/><path d="M4,-22 Q10,4 2,30" stroke="#e4f3d2" stroke-width="4" fill="none"/>`;break;
+  case 'tomato':g=`<circle r="26" fill="#e34b3b"/><ellipse cx="-8" cy="-8" rx="7" ry="5" fill="#ff8b7a" opacity=".7"/><path d="M0,-26 l6,-8 l-2,9 l10,-2 l-9,5 l8,6 l-10,-3 l-3,9 l-2,-9 l-9,4 l7,-7 l-9,-5z" fill="#3f8a3a"/>`;break;
+  case 'carrot':g=`<path d="M-13,-30 Q0,-37 13,-30 L2,34 Q0,38 -2,34Z" fill="#f08a2c"/><path d="M-7,-10 h9 M-4,6 h7" stroke="#c96a18" stroke-width="3"/><path d="M0,-32 q-12,-20 -4,-28 M0,-32 q2,-22 10,-26 M0,-32 q10,-14 18,-14" stroke="#4f9a41" stroke-width="5" fill="none" stroke-linecap="round"/>`;break;
+  case 'potato':g=`<ellipse rx="34" ry="24" fill="#c9a06a"/><ellipse cx="-8" cy="-8" rx="14" ry="7" fill="#dcb886" opacity=".6"/><circle cx="-10" cy="-2" r="2.5" fill="#9c7646"/><circle cx="12" cy="4" r="2.5" fill="#9c7646"/><circle cx="2" cy="12" r="2" fill="#9c7646"/>`;break;
+  case 'corn':g=`<ellipse rx="16" ry="38" fill="#f4cf45"/><path d="M-12,-24 h24 M-15,-10 h30 M-15,4 h30 M-13,18 h26 M-5,-35 v70 M5,-35 v70" stroke="#d9ad2a" stroke-width="2"/><path d="M-4,40 Q-30,10 -18,-30 Q-10,10 2,40Z" fill="#6fb85a"/><path d="M4,40 Q30,10 18,-30 Q10,10 -2,40Z" fill="#5aa64a"/>`;break;
+  case 'eggplant':g=`<path d="M0,-30 C26,-26 30,20 8,34 C-14,44 -26,10 -12,-18Z" fill="#6d3b86"/><ellipse cx="-4" cy="-6" rx="5" ry="12" fill="#9a6ab3" opacity=".5"/><path d="M-10,-30 q10,-8 20,0 l-6,6 h-8z" fill="#4f9a41"/>`;break;
+  case 'lettuce':g=`<path d="M-36,10 Q-40,-30 0,-38 Q40,-30 36,10 Q30,34 0,34 Q-30,34 -36,10Z" fill="#8fd06a"/><path d="M-20,20 Q-24,-10 0,-22 Q24,-10 20,20" fill="#b7e58f"/><path d="M0,-20 V30" stroke="#e8f6d8" stroke-width="3"/>`;break;
+  }
+  return `<g transform="translate(${f(x)},${f(y)}) rotate(${f(rot)}) scale(${(+s).toFixed(3)})">${g}</g>`;
+}
+const VEGS=['cabbage','tomato','carrot','potato','corn','eggplant','lettuce'];
+function crate(x,y,w,h,items,sc=1,seed=0){
+  let s=`<g transform="translate(${f(x)},${f(y)})">`;
+  items.forEach((it,i)=>{const n=items.length;s+=veg(it,-w/2+w*(i+.5)/n,6-(i%2)*10,sc,(rnd(i+seed)*40-20))});
+  s+=`<rect x="${-w/2}" y="0" width="${w}" height="${h}" rx="6" fill="#c8894f"/><rect x="${-w/2}" y="${f(h*.48)}" width="${w}" height="6" fill="#a86d3a"/><rect x="${-w/2+8}" y="8" width="${w-16}" height="${f(h*.3)}" rx="4" fill="#d9a066"/>`;
+  return s+'</g>';
+}
+function basket(x,y,s,n){
+  let g=`<g transform="translate(${f(x)},${f(y)}) scale(${s})">`;
+  const spots=[[-40,-8],[0,-14],[40,-8],[-20,-30],[22,-30],[0,-48]];
+  for(let i=0;i<Math.min(n,spots.length);i++)g+=veg('tomato',spots[i][0],spots[i][1],.95);
+  g+=`<path d="M-80,-10 h160 l-18,80 h-124z" fill="#c99a5a"/><path d="M-76,8 h152 M-72,28 h144 M-68,48 h136" stroke="#a87a3e" stroke-width="5"/><path d="M-50,-10 v78 M-16,-10 v78 M16,-10 v78 M50,-10 v78" stroke="#b58a4c" stroke-width="4"/><rect x="-86" y="-16" width="172" height="12" rx="6" fill="#b3824a"/>`;
+  return g+'</g>';
+}
+
+/* ---------- 등장인물 (임시 2D 캐릭터: 추후 일러스트로 교체 가능) ---------- */
+function character(o){
+  const d=Object.assign({id:'',x:0,y:0,s:1,flip:false,skin:'#f1c29d',hair:'#3a2a20',hairStyle:'short',tail:0,
+    shirt:'#4f8f5a',sleeve:null,forearm:null,pants:'#51606e',shoe:'#3b302a',
+    armF:{s:8,e:8},armB:{s:-8,e:8},legF:0,legB:0,bend:0,head:0,smile:.6,blink:0,blush:.45,
+    hat:false,apron:null,towel:false,bag:false,sweat:0,holdF:'',holdB:'',bob:0,wrinkle:false,waist:true},o);
+  const sleeve=d.sleeve||d.shirt,fore=d.forearm||d.skin;
+  const arm=(a,front,hold)=>{
+    const sc=front?sleeve:dark(sleeve),fc=front?fore:dark(fore),hc=front?d.skin:dark(d.skin);
+    return `<g transform="translate(${front?6:-6},-104) rotate(${f(-a.s)})"><rect x="-12" y="-8" width="24" height="68" rx="12" fill="${sc}"/>`+
+      `<g transform="translate(0,58) rotate(${f(-a.e)})"><rect x="-10.5" y="-6" width="21" height="62" rx="10.5" fill="${fc}"/><circle cy="60" r="12.5" fill="${hc}"/>`+
+      `<g transform="translate(0,64) rotate(${f(a.s+a.e)})">${hold||''}</g></g></g>`;
+  };
+  const leg=(ang,front)=>{const pc=front?d.pants:dark(d.pants);
+    return `<g transform="translate(${front?8:-8},-150) rotate(${f(-ang)})"><rect x="-14" y="-6" width="28" height="150" rx="13" fill="${pc}"/><path d="M-14,136 h26 q17,0 19,14 h-45z" fill="${d.shoe}"/></g>`};
+  const T=`translate(0,-150) rotate(${f(d.bend)})`;
+  let back='';
+  back+=arm(d.armB,false,d.holdB);
+  if(d.bag)back+=`<g transform="translate(-40,-14) rotate(6)"><rect x="-32" y="0" width="64" height="74" rx="9" fill="#eadcbf"/><path d="M-6,46 q6,-26 26,-30 q-2,24 -26,30z" fill="#6fae5a"/><path d="M-6,46 l14,-16" stroke="#4f8f41" stroke-width="3"/></g>`;
+  let body=`<rect x="-10" y="-150" width="20" height="30" fill="${d.skin}"/>`;
+  body+=`<rect x="-38" y="-128" width="76" height="140" rx="30" fill="${d.shirt}"/>`;
+  if(d.waist)body+=`<rect x="-38" y="-16" width="76" height="28" rx="13" fill="${d.pants}"/>`;
+  if(d.apron)body+=`<path d="M-18,-106 L-12,-142 M30,-106 L22,-142" stroke="${d.apron}" stroke-width="6"/><path d="M-26,-108 h62 v12 q6,50 4,132 h-70 q-2,-92 4,-144z" fill="${d.apron}"/><rect x="-12" y="-34" width="34" height="24" rx="5" fill="${dark(d.apron,.15)}"/><rect x="10" y="-96" width="22" height="12" rx="2" fill="#fffbef"/>`;
+  if(d.bag)body+=`<path d="M-8,-118 L-34,-10" stroke="#c7ab80" stroke-width="7" stroke-linecap="round"/>`;
+  if(d.towel)body+=`<path d="M-24,-130 Q4,-112 30,-130 L32,-116 Q4,-98 -26,-116Z" fill="#f6f4ea"/><rect x="18" y="-122" width="17" height="52" rx="5" fill="#f6f4ea"/><path d="M20,-78 h13" stroke="#9fc7e0" stroke-width="3"/>`;
+  // head
+  let hb='';
+  if(d.hairStyle==='ponytail')hb=`<g transform="translate(-30,-22) rotate(${f(d.tail)})"><path d="M0,0 Q-30,8 -22,58 Q-8,34 6,12Z" fill="${d.hair}"/></g>`;
+  if(d.hairStyle==='bun')hb=`<circle cx="-30" cy="-26" r="17" fill="${d.hair}"/>`;
+  if(d.hairStyle==='bob')hb=`<path d="M-38,-10 Q-44,30 -26,40 L14,30 L0,-20Z" fill="${d.hair}"/>`;
+  const happy=d.smile>.85;
+  const eyes=happy?`<path d="M7,-1 q5,-7 10,0 M22,-1 q5,-7 10,0" stroke="#2b211c" stroke-width="3.2" fill="none" stroke-linecap="round"/>`
+    :`<ellipse cx="12" cy="-2" rx="3.6" ry="${d.blink?0.8:4.4}" fill="#2b211c"/><ellipse cx="27" cy="-2" rx="3.4" ry="${d.blink?0.8:4.2}" fill="#2b211c"/>`;
+  const my=16+10*d.smile;
+  const mouth=d.smile>.7?`<path d="M13,15 Q22,${f(my+2)} 31,14Z" fill="#b84a40"/>`:`<path d="M14,16 Q22,${f(my)} 30,15" stroke="#9b3f35" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  let head=`<g transform="translate(4,-168) rotate(${f(d.head)})">${hb}`+
+    `<circle r="36" fill="${d.skin}"/><circle cx="-6" cy="4" r="8" fill="${d.skin}"/><circle cx="-6" cy="4" r="4" fill="${dark(d.skin,.3)}" opacity=".35"/>`+
+    `<path d="M-37,6 Q-44,-44 2,-40 Q38,-38 36,-12 Q14,-24 -6,-16 Q-22,-8 -26,10Z" fill="${d.hair}"/>`+
+    `<path d="M6,-13 q5,-3 11,0 M21,-13 q5,-3 10,0" stroke="${dark(d.hair,.2)}" stroke-width="2.6" fill="none" stroke-linecap="round"/>`+
+    eyes+`<path d="M34,3 q6,4 0,8" stroke="${dark(d.skin,.25)}" stroke-width="2.6" fill="none"/>`+mouth+
+    `<ellipse cx="23" cy="10" rx="6.5" ry="4" fill="#f08c7e" opacity="${d.blush}"/>`+
+    (d.wrinkle?`<path d="M33,-6 l5,-2 M33,-1 l5,1" stroke="${dark(d.skin,.25)}" stroke-width="1.8"/>`:'')+
+    `<g opacity="${f(d.sweat)}"><path d="M38,-30 q7,11 0,16 q-7,-5 0,-16z" fill="#9fd8ff" stroke="#6fb8e8" stroke-width="1.5"/>${sparkle(48,-40,7,1)}</g>`+
+    (d.hat?`<ellipse cx="2" cy="-26" rx="68" ry="13" fill="#e9c874"/><path d="M-30,-28 Q-30,-66 2,-66 Q34,-66 34,-28Z" fill="#dcb65a"/><rect x="-31" y="-40" width="65" height="9" fill="#a4553d"/><ellipse cx="2" cy="-24" rx="68" ry="7" fill="#f3d88e" opacity=".6"/>`:'')+
+    `</g>`;
+  const sx=d.s*(d.flip?-1:1);
+  return `<g id="${d.id}" transform="translate(${f(d.x)},${f(d.y+d.bob)}) scale(${sx.toFixed(3)},${d.s.toFixed(3)})">`+
+    `<g transform="${T}">${back}</g>`+leg(d.legB,false)+leg(d.legF,true)+
+    `<g transform="${T}">${body}${head}${arm(d.armF,true,d.holdF)}</g></g>`;
+}
+/* 인물 기본 설정: 교체 시 이 세 개만 수정 */
+const CH={
+  CH_Farmer:{id:'CH_Farmer',skin:'#d9a27c',hair:'#7b736b',shirt:'#7aa0c8',forearm:'#d9a27c',pants:'#6b5b45',shoe:'#4a3b2c',hat:true,towel:true,wrinkle:true},
+  CH_Staff:{id:'CH_Staff',skin:'#f1c6a3',hair:'#3a2a20',hairStyle:'bun',shirt:'#f6f2e8',pants:'#5b5046',apron:'#3f8f5a'},
+  CH_Consumer:{id:'CH_Consumer',skin:'#f4cdb0',hair:'#2e2019',hairStyle:'ponytail',shirt:'#e98a6b',pants:'#3f4a63',shoe:'#2d2a33',bag:true}
+};
+const ch=(name,o)=>character(Object.assign({},CH[name],o));
+
+/* ---------- 공통 배경 ---------- */
+function storeBG(id,L){
+  let s=`<defs>${grad(id+'wall',[[0,'#fcf1df'],[1,'#f0d9b8']])}</defs><rect width="${W}" height="${H}" fill="url(#${id}wall)"/>`;
+  for(let x=0;x<W;x+=64)s+=`<rect x="${x}" y="0" width="2" height="880" fill="#e6caa2" opacity=".6"/>`;
+  s+=`<polygon points="200,0 520,0 1100,880 600,880" fill="#fffbe8" opacity=".25"/><polygon points="700,0 900,0 1500,880 1180,880" fill="#fffbe8" opacity=".18"/>`;
+  [360,520].forEach((y,r)=>{
+    s+=`<rect x="80" y="${y}" width="${W-160}" height="16" rx="4" fill="#b07a48"/>`;
+    for(let i=0;i<9;i++){const cx=190+i*196;s+=crate(cx,y-58,150,58,[VEGS[(i+r*3)%7],VEGS[(i+r*3+2)%7],VEGS[(i+r*3+4)%7]],.62,i+r*9)}
+  });
+  s+=`<rect x="510" y="95" width="900" height="112" rx="16" fill="#3f7d4c"/><rect x="522" y="107" width="876" height="88" rx="10" fill="none" stroke="#f3e2b3" stroke-width="3" opacity=".7"/>`+txt(960,168,L.storeSign,52,'#fff8e6',700);
+  [300,1620].forEach(x=>s+=`<path d="M${x},0 V60" stroke="#6b5a48" stroke-width="3"/><path d="M${x-36},96 L${x-18},60 h36 L${x+36},96Z" fill="#e7b24c"/><ellipse cx="${x}" cy="100" rx="60" ry="16" fill="#fff4c8" opacity=".6"/>`);
+  s+=`<rect x="0" y="880" width="${W}" height="${H-880}" fill="#c9a07a"/>`;
+  for(let x=-40;x<W;x+=180)s+=`<path d="M${x},880 L${x-60},${H}" stroke="#b58c66" stroke-width="3"/>`;
+  return s;
+}
+function displayTable(x0,x1,top,items,seed){
+  const w=x1-x0,n=items.length,cw=w/n;
+  let s='';
+  items.forEach((arr,i)=>s+=crate(x0+cw*(i+.5),top-40,cw-24,82,arr,.9,seed+i*5));
+  s+=`<rect x="${x0-20}" y="${top+36}" width="${w+40}" height="${H-top}" fill="#b9804c"/><rect x="${x0-20}" y="${top+36}" width="${w+40}" height="18" fill="#9c6636"/>`;
+  for(let i=1;i<5;i++)s+=`<rect x="${x0-20}" y="${top+36+i*48}" width="${w+40}" height="3" fill="#a06a3c"/>`;
+  return s;
+}
+function nameTag(L,x,y,s,op=1,rot=0){
+  return `<g transform="translate(${f(x)},${f(y)}) rotate(${f(rot)}) scale(${s.toFixed(3)})" opacity="${f(op)}">`+
+    `<rect x="-5" y="30" width="10" height="70" fill="#8a6a44"/><rect x="-110" y="-60" width="220" height="100" rx="12" fill="#fffdf4" stroke="#5f9c50" stroke-width="5"/>`+
+    `<circle cx="-72" cy="-10" r="26" fill="#e6f2da"/><circle cx="-72" cy="-16" r="10" fill="#d9a27c"/><path d="M-90,-20 h36 l-6,-10 h-24z" fill="#dcb65a"/><path d="M-88,8 q16,-18 32,0" fill="#7aa0c8"/>`+
+    txt(-36,-24,L.producerTitle,20,'#5f9c50',700,'start')+txt(-36,6,L.producerName,24,'#3b2e22',800,'start')+txt(-36,30,L.producerArea,18,'#7a6a58',400,'start')+`</g>`;
+}
+function bubble(x,y,w,h,str,op,tailDir=1,size=40){
+  if(op<=0)return '';
+  return `<g opacity="${f(op)}" transform="translate(${f(x)},${f(y)})"><rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="${h/2}" fill="#fff" stroke="#e2d2b8" stroke-width="3"/>`+
+    `<path d="M${-20*tailDir},${h/2-4} L${-40*tailDir},${h/2+34} L${6*tailDir},${h/2-4}Z" fill="#fff"/>`+txt(0,size*.36,str,size,'#3b2e22',700)+`</g>`;
+}
+function truck(x,y,s,dir,col='#5f9c50'){
+  return `<g transform="translate(${f(x)},${f(y)}) scale(${f(s*dir)},${f(s)})"><rect x="-44" y="-40" width="58" height="36" rx="5" fill="${col}"/><path d="M14,-30 h20 l14,14 v12 h-34z" fill="${dark(col,.15)}"/><rect x="22" y="-26" width="12" height="10" fill="#d8eef7"/><rect x="-44" y="-8" width="92" height="8" fill="#555"/><circle cx="-26" cy="2" r="9" fill="#333"/><circle cx="30" cy="2" r="9" fill="#333"/>`+veg('cabbage',-28,-48,.35)+veg('tomato',-8,-46,.4)+veg('carrot',6,-50,.35,30)+`</g>`;
+}
+const bz=(P,t)=>{const u=1-t;return[0,1].map(k=>u*u*u*P[0][k]+3*u*u*t*P[1][k]+3*u*t*t*P[2][k]+t*t*t*P[3][k])};
+const bzPath=P=>`M${P[0]} C${P[1]} ${P[2]} ${P[3]}`;
+
+/* =========================================================
+   장면 1: 안개 낀 새벽 밭, 해돋이
+   ========================================================= */
+function S1(t,dur,id,L){
+  const p=clamp(t/dur),e=ease(p);
+  const sunY=lerp(780,470,eout(p));
+  let s=`<defs>${grad(id+'sky',[[0,mix('#33466e','#9ccbe9',e)],[.62,mix('#c98f9a','#ffdcb4',e)],[1,mix('#f2a57c','#fff0cf',e)]])}${glow(id+'g','#fff3c4','#ffd58a')}<filter id="${id}bl" x="-20%" y="-100%" width="140%" height="300%"><feGaussianBlur stdDeviation="26"/></filter></defs>`;
+  s+=`<rect width="${W}" height="${H}" fill="url(#${id}sky)"/>`;
+  s+=`<circle cx="1180" cy="${f(sunY)}" r="380" fill="url(#${id}g)"/><circle cx="1180" cy="${f(sunY)}" r="74" fill="#ffe29a"/>`;
+  s+=ridge(610,110,1.2,mix('#56638f','#a5bcd9',e));
+  s+=ridge(650,70,2.7,mix('#48677a','#86aaa4',e));
+  s+=`<rect x="0" y="660" width="${W}" height="50" fill="${mix('#8ea3c4','#c9e3ef',e)}"/><ellipse cx="1180" cy="684" rx="${f(150+80*e)}" ry="7" fill="#fff0bf" opacity="${f(.4+.5*e)}"/>`;
+  s+=`<rect x="0" y="700" width="${W}" height="${H-700}" fill="${mix('#4f7a45','#7ab45c',e)}"/>`;
+  for(let i=-14;i<=14;i++){
+    const x0=960+i*26,x1=960+i*300;
+    s+=`<path d="M${x0},700 L${x1-44},${H} L${x1+44},${H}Z" fill="${mix('#6b5a3e','#a3825a',e)}" opacity=".55"/>`;
+  }
+  for(let i=-14;i<14;i++)for(let k=1;k<=9;k++){
+    const v=Math.pow(k/9,1.7),yy=700+380*v,xx=960+(i+.5)*(26+274*v),r=3+24*v;
+    if(xx<-40||xx>W+40)continue;
+    s+=`<circle cx="${f(xx)}" cy="${f(yy)}" r="${f(r)}" fill="${mix('#3e6b37','#5fae4c',e)}"/><circle cx="${f(xx-r*.3)}" cy="${f(yy-r*.3)}" r="${f(r*.55)}" fill="${mix('#5a8a48','#93d46e',e)}"/>`;
+  }
+  const fo=.9*(1-.7*e);
+  s+=`<g filter="url(#${id}bl)" opacity="${f(fo)}"><ellipse cx="${f(700+90*p)}" cy="690" rx="950" ry="70" fill="#fff"/><ellipse cx="${f(1300-70*p)}" cy="770" rx="820" ry="60" fill="#fff"/><ellipse cx="${f(500+60*p)}" cy="870" rx="700" ry="50" fill="#fff" opacity=".7"/></g>`;
+  for(let b=0;b<3;b++){const bx=260+t*95+b*70,by=360-b*30+Math.sin(t*2+b)*8,fl=Math.sin(t*9+b*2);
+    s+=`<path transform="translate(${f(bx)},${f(by)}) scale(1,${f(.6+.4*fl)})" d="M-14,0 q7,-8 14,0 q7,-8 14,0" stroke="#3a3a4a" fill="none" stroke-width="3.2" stroke-linecap="round" opacity="${f(.4+.4*e)}"/>`}
+  return cam(s,1.1-.08*e,960,620);
+}
+
+/* =========================================================
+   장면 2: 농부 수확, 땀 닦고 미소
+   ========================================================= */
+function S2(t,dur,id,L){
+  let s=`<defs>${grad(id+'sky',[[0,'#8fcbee'],[1,'#fff3d2']])}${glow(id+'g','#fffbe0','#ffe7a0')}</defs>`;
+  s+=`<rect width="${W}" height="${H}" fill="url(#${id}sky)"/><circle cx="1650" cy="200" r="300" fill="url(#${id}g)"/><circle cx="1650" cy="200" r="70" fill="#fff0b0"/>`;
+  s+=ridge(560,80,.8,'#9dbfd0')+ridge(600,50,2.2,'#7fae86');
+  s+=`<rect x="0" y="600" width="${W}" height="${H-600}" fill="#88bd60"/>`;
+  for(let r=0;r<6;r++){const y=622+r*44+r*r*5,sc=.22+r*.1,step=110*sc+30;
+    for(let x=-20+(r%2)*step/2;x<W+40;x+=step)s+=veg('lettuce',x,y,sc)}
+  // 토마토 지지대 줄
+  const pickT=[[1.0,975,590],[2.8,1010,520]];
+  for(let k=0;k<3;k++){const vx=1040+k*230;
+    s+=`<rect x="${vx-4}" y="420" width="8" height="530" fill="#9a7650"/>`;
+    for(let j=0;j<6;j++)s+=`<ellipse cx="${vx+(j%2?30:-30)}" cy="${470+j*75}" rx="62" ry="40" fill="${j%2?'#4f9a41':'#5fae4c'}"/>`;
+    for(let j=0;j<4;j++)s+=veg('tomato',vx+(j%2?40:-34),520+j*90,.8);
+  }
+  pickT.forEach(([tt,x,y])=>{if(t<tt)s+=veg('tomato',x,y,.9)});
+  s+=`<rect x="860" y="770" width="170" height="160" fill="#c8894f"/><rect x="860" y="840" width="170" height="8" fill="#a86d3a"/>`;
+  const count=3+(t>=2.0?1:0)+(t>=3.8?1:0);
+  s+=basket(945,760,.8,count);
+  if(t>=3.8)for(let i=0;i<3;i++){const tw=(t*2+i*.7)%2;s+=sparkle(900+i*50,690-i*15,10,Math.sin(Math.PI*clamp(tw))*.9)}
+  // 농부 동작
+  const armS=kf(t,[[0,10],[1.0,88],[2.0,38],[2.8,100],[3.8,38],[4.4,8],[5.2,100],[6.9,100],[7.6,8]]);
+  const armE=kf(t,[[0,10],[1.0,4],[2.0,4],[2.8,0],[3.8,4],[4.4,8],[5.2,125],[6.9,125],[7.6,10]]);
+  const wipe=(t>5.2&&t<6.9)?Math.sin((t-5.2)*9)*9:0;
+  const holding=(t>=1.0&&t<2.0)||(t>=2.8&&t<3.8);
+  const sweat=seg(t,4.3,4.8)*(1-seg(t,5.6,6.4));
+  const smile=kf(t,[[0,.55],[4.4,.5],[6.9,.6],[7.4,1]]);
+  const headT=kf(t,[[0,0],[1,-6],[2,4],[2.8,-10],[3.8,4],[4.4,0],[6.9,-4],[7.4,-8],[8.5,2],[10,0]])+(t>7.5?Math.sin((t-7.5)*6)*2:0);
+  s+=ch('CH_Farmer',{x:800,y:930,s:1.35,armF:{s:armS+wipe,e:armE},armB:{s:-6,e:18},head:headT,smile,sweat,
+    holdF:holding?veg('tomato',0,8,.95):'',bob:t>7.5?-Math.abs(Math.sin((t-7.5)*6))*4:0});
+  if(t>7.4)for(let i=0;i<4;i++){const a=i*1.6+t*.8;s+=sparkle(830+Math.cos(a)*150,420+Math.sin(a)*60,12,.4+.4*Math.sin(t*5+i))}
+  s+=`<rect x="0" y="945" width="${W}" height="${H-945}" fill="#7bb055"/>`;
+  for(let x=40;x<W;x+=120)s+=veg('cabbage',x,985+(x%240?8:0),.95);
+  const z=1+.1*ease(seg(t,4,dur));
+  return cam(s,z,880,560);
+}
+
+/* =========================================================
+   장면 3: 짧은 이동 경로 (탄소 저감)
+   ========================================================= */
+function S3(t,dur,id,L){
+  let s=`<rect width="${W}" height="${H}" fill="#f5f0e1"/>`;
+  for(let i=0;i<14;i++)s+=`<ellipse cx="${f(rnd(i)*W)}" cy="${f(rnd(i+40)*H)}" rx="${f(120+rnd(i+9)*200)}" ry="${f(70+rnd(i+19)*110)}" fill="#dcebc6" opacity=".8"/>`;
+  s+=`<path d="M1260,720 C1320,640 1500,650 1560,730 C1620,820 1500,900 1400,880 C1300,860 1200,800 1260,720Z" fill="#bfe0f0"/>`+txt(1410,790,'호수',30,'#6fa3bf',400);
+  for(let i=0;i<9;i++){const mx=150+i*210+rnd(i)*60,my=250+rnd(i+3)*80;s+=`<path d="M${f(mx-60)},${f(my+50)} L${f(mx)},${f(my-40)} L${f(mx+60)},${f(my+50)}Z" fill="#c9d9b0"/><path d="M${f(mx-18)},${f(my-13)} L${f(mx)},${f(my-40)} L${f(mx+18)},${f(my-13)}Z" fill="#fff" opacity=".6"/>`}
+  for(let i=0;i<30;i++){const x=rnd(i+100)*W,y=380+rnd(i+200)*640;if(Math.abs(x-850)<380&&Math.abs(y-600)<150)continue;s+=`<path d="M${f(x-12)},${f(y+14)} L${f(x)},${f(y-16)} L${f(x+12)},${f(y+14)}Z" fill="#9cc47a"/>`}
+  const farm=[620,640],store=[1100,560];
+  const LONG=[farm,[-500,1500],[2500,-700],store],SHORT=[farm,[760,520],[960,500],store];
+  // 먼 길
+  const lp=ease(seg(t,.2,2.2)),lf=1-.85*ease(seg(t,2.4,3.2));
+  s+=`<g opacity="${f(lf)}"><path d="${bzPath(LONG)}" pathLength="1" stroke="#9a9a9a" stroke-width="12" fill="none" stroke-dasharray="${f(lp)} 1" stroke-linecap="round"/>`;
+  if(t>.3){const tp=.36*ease(seg(t,.3,2.4)),q=bz(LONG,tp),q2=bz(LONG,tp+.01);
+    for(let k=1;k<=4;k++){const qq=bz(LONG,Math.max(0,tp-k*.02));s+=`<circle cx="${f(qq[0])}" cy="${f(qq[1]-20)}" r="${10+k*5}" fill="#8b8b8b" opacity="${f(.35-.06*k)}"/>`}
+    s+=truck(q[0],q[1],.9,q2[0]>=q[0]?1:-1,'#9a9a9a');}
+  s+=txt(1560,330,L.farLabel,44,'#8a8a8a',700)+`</g>`;
+  // 가까운 길
+  const sp=ease(seg(t,3.0,4.2));
+  s+=`<path d="${bzPath(SHORT)}" pathLength="1" stroke="#5fae4c" stroke-width="16" fill="none" stroke-dasharray="${f(sp)} 1" stroke-linecap="round"/>`;
+  s+=`<g opacity="${f(ease(seg(t,3.6,4.2)))}">`+txt(860,470,L.nearLabel,46,'#3f8f3a',800)+`</g>`;
+  // 농가 & 직매장
+  s+=`<g transform="translate(${farm[0]},${farm[1]})">`;
+  for(let i=0;i<3;i++)s+=`<rect x="${-150+i*70}" y="10" width="62" height="80" rx="6" fill="#a8d07e"/><path d="M${-140+i*70},30 h42 M${-140+i*70},50 h42 M${-140+i*70},70 h42" stroke="#6fae4c" stroke-width="5"/>`;
+  s+=`<rect x="70" y="-30" width="80" height="60" fill="#fff4dc"/><path d="M60,-30 L110,-72 L160,-30Z" fill="#d9603f"/><rect x="98" y="-4" width="22" height="34" fill="#a86d3a"/>`+txt(0,140,L.farmLabel,36,'#4a3b2c',700)+`</g>`;
+  s+=`<g transform="translate(${store[0]},${store[1]})"><rect x="-80" y="-70" width="190" height="110" fill="#fffaf0" stroke="#d8c7a8" stroke-width="3"/>`;
+  for(let i=0;i<6;i++)s+=`<path d="M${-90+i*35},-70 h35 v22 q-17.5,14 -35,0z" fill="${i%2?'#fff':'#5fae4c'}"/>`;
+  s+=`<rect x="-10" y="-20" width="44" height="60" fill="#c9e6f2"/><rect x="-66" y="-30" width="44" height="34" fill="#c9e6f2"/><rect x="50" y="-30" width="44" height="34" fill="#c9e6f2"/>`+txt(15,-96,L.storeShort,34,'#3f7d4c',800)+txt(15,90,L.storeName,30,'#4a3b2c',700)+`</g>`;
+  if(t>4.2){const tp=eout(seg(t,4.2,6.2)),q=bz(SHORT,tp);
+    for(let k=1;k<=5;k++){const qq=bz(SHORT,Math.max(0,tp-k*.07));const a=t*3+k;s+=`<path transform="translate(${f(qq[0])},${f(qq[1]-30-k*6)}) rotate(${f(a*40)}) scale(${f(.9-.1*k)})" d="M0,0 q10,-14 22,-6 q-8,14 -22,6z" fill="#6fbf5a" opacity="${f(.8-.12*k)}"/>`}
+    s+=truck(q[0],q[1],1.05,1);}
+  // 탄소발자국 아이콘
+  const fp=ease(seg(t,5.6,6.3));
+  if(fp>0){const sc=lerp(1.25,.6,ease(seg(t,6.3,7.6)));
+    s+=`<g opacity="${f(fp)}"><rect x="600" y="80" width="720" height="190" rx="95" fill="#fffdf6" stroke="#cfe3bf" stroke-width="4"/>`+
+      `<g transform="translate(720,175) scale(${sc.toFixed(3)})"><ellipse cx="0" cy="18" rx="34" ry="52" fill="#7a7a7a"/><circle cx="-22" cy="-50" r="11" fill="#7a7a7a"/><circle cx="-4" cy="-58" r="10" fill="#7a7a7a"/><circle cx="14" cy="-54" r="9" fill="#7a7a7a"/><circle cx="28" cy="-44" r="8" fill="#7a7a7a"/>`+txt(0,30,'CO₂',24,'#fff',800)+`</g>`+
+      `<path d="M830,130 v70 m-22,-22 l22,24 l22,-24" stroke="#5fae4c" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`+txt(1090,195,L.carbonLabel,54,'#3f8f3a',800)+`</g>`;}
+  return cam(s,1.02+.04*ease(seg(t,0,dur)),900,600);
+}
+
+/* =========================================================
+   장면 4: 직원이 정성껏 진열 + 생산자 이름표
+   ========================================================= */
+function S4(t,dur,id,L){
+  let s=storeBG(id,L);
+  const placeT=2.2,tagT=5.2;
+  const bendV=kf(t,[[0,4],[1.2,16],[2.4,16],[3.2,2],[4.4,10],[5.4,10],[6.2,0]]);
+  const aS=kf(t,[[0,58],[.4,58],[2.2,52],[3.2,30],[4.2,60],[5.2,52],[6.2,32],[9,32]]);
+  const aE=kf(t,[[0,62],[.4,62],[2.2,8],[3.2,60],[4.2,50],[5.2,10],[6.2,64],[9,64]]);
+  const smile=kf(t,[[0,.65],[6,.7],[6.6,1]]);
+  const holdCab=t<placeT?veg('cabbage',0,10,1):'';
+  const holdTag=(t>=3.4&&t<tagT)?`<g transform="scale(.55)">${nameTag(L,0,-20,1)}</g>`:'';
+  s+=ch('CH_Staff',{x:900,y:990,s:1.45,bend:bendV,armF:{s:aS,e:aE},armB:{s:aS-6,e:aE},head:kf(t,[[0,6],[2.4,10],[3.2,0],[5.4,8],[6.4,-4]]),smile,holdF:holdCab+holdTag});
+  const items=[['carrot','carrot','carrot'],['tomato','tomato','tomato','tomato'],['potato','corn','potato'],['eggplant','eggplant','eggplant']];
+  s+=displayTable(560,1360,780,items,3);
+  if(t>=placeT)s+=veg('cabbage',1080,742-12*Math.sin(Math.PI*seg(t,placeT,placeT+.35)),1.05);
+  if(t>=placeT)for(let i=0;i<3;i++)s+=sparkle(1040+i*40,700-i*16,11,(1-seg(t,placeT,placeT+1.2))*.9);
+  if(t>=tagT){const k=eback(seg(t,tagT,tagT+.5));s+=nameTag(L,1180,790,.9*k,1,-4)}
+  if(t>6.6)for(let i=0;i<3;i++){const a=(t-6.6)*1.2+i*2.1;s+=`<path transform="translate(${f(760+i*60)},${f(470-((t-6.6)*40+i*30)%120)}) scale(.9)" d="M0,6 C-12,-6 -6,-16 0,-8 C6,-16 12,-6 0,6Z" fill="#f08c7e" opacity="${f(.6*Math.sin(Math.min(Math.PI,a)))}"/>`}
+  const z=1+.14*ease(seg(t,4.6,dur));
+  return cam(s,z,1100,720);
+}
+
+/* =========================================================
+   장면 5: 퇴근길, 에코백, "오늘 저녁엔 뭘 먹을까?"
+   ========================================================= */
+function menuIcon(k,x,y,s){
+  let g=`<g transform="translate(${f(x)},${f(y)}) scale(${f(s)})">`;
+  if(k===0)g+=`<path d="M-60,-10 h120 q-6,54 -60,56 q-54,-2 -60,-56z" fill="#6b4a36"/><ellipse cy="-10" rx="60" ry="14" fill="#d9763c"/>`+veg('potato',-20,-14,.4)+veg('cabbage',18,-14,.3)+`<path d="M-20,-40 q-10,-14 0,-28 M10,-40 q-10,-14 0,-28" stroke="#fff" stroke-width="5" fill="none" opacity=".7"/>`;
+  if(k===1)g+=`<path d="M-66,-6 h132 q-10,50 -66,52 q-56,-2 -66,-52z" fill="#fdf8ee" stroke="#e2d2b8" stroke-width="3"/>`+veg('lettuce',-22,-16,.6)+veg('tomato',20,-16,.55)+veg('carrot',0,-26,.45,70);
+  if(k===2)g+=`<ellipse cy="10" rx="72" ry="22" fill="#fdf8ee" stroke="#e2d2b8" stroke-width="3"/><ellipse cx="-12" cy="0" rx="40" ry="16" fill="#f6d34a"/><circle cx="20" cy="-6" r="14" fill="#e34b3b"/><circle cx="-16" cy="-8" r="12" fill="#e34b3b"/>`;
+  return g+'</g>';
+}
+function S5(t,dur,id,L){
+  let s=`<defs>${grad(id+'sky',[[0,'#f39a6c'],[.55,'#ffd29a'],[1,'#ffeccd']])}${glow(id+'g','#fff4cf','#ffc27a')}</defs><rect width="${W}" height="${H}" fill="url(#${id}sky)"/>`;
+  s+=`<circle cx="1400" cy="560" r="420" fill="url(#${id}g)"/><circle cx="1400" cy="560" r="110" fill="#ffd27f"/>`;
+  const layer=(speed,base,hmin,hmax,col,win,seed)=>{
+    const pw=2400,off=(t*speed)%pw;let g='';
+    for(let rep=0;rep<2;rep++){let x=-off+rep*pw,i=0;
+      while(x<-off+(rep+1)*pw){const w=160+rnd(i+seed)*140,h=hmin+rnd(i+seed+50)*(hmax-hmin);
+        if(x+w>-10&&x<W+10){g+=`<rect x="${f(x)}" y="${f(base-h)}" width="${f(w-8)}" height="${f(h)}" fill="${col}"/>`;
+          if(win)for(let wy=base-h+30;wy<base-40;wy+=56)for(let wx=x+22;wx<x+w-40;wx+=48)if(rnd(wx*.37+wy*.11)>.45)g+=`<rect x="${f(wx)}" y="${f(wy)}" width="24" height="30" rx="3" fill="#ffe8a8" opacity=".85"/>`;}
+        x+=w;i++;}}
+    return g;};
+  s+=layer(40,820,220,420,'#e9ab8c',false,1)+layer(110,880,180,360,'#c98a78',true,7);
+  { const pw=640,off=(t*200)%pw;for(let x=-off;x<W+pw;x+=pw){s+=`<rect x="${f(x+300)}" y="700" width="16" height="190" fill="#7a5a44"/><circle cx="${f(x+308)}" cy="660" r="90" fill="#7fae62"/><circle cx="${f(x+270)}" cy="690" r="60" fill="#8fbf6e"/><rect x="${f(x+60)}" y="560" width="10" height="330" fill="#5a5a66"/><ellipse cx="${f(x+65)}" cy="560" rx="30" ry="12" fill="#fff2b8"/>`}}
+  s+=`<rect x="0" y="880" width="${W}" height="${H-880}" fill="#dcc6aa"/>`;
+  { const pw=220,off=(t*260)%pw;for(let x=-off;x<W+pw;x+=pw)s+=`<path d="M${f(x)},880 L${f(x-50)},${H}" stroke="#c7ae90" stroke-width="4"/>`}
+  s+=`<rect x="0" y="876" width="${W}" height="10" fill="#bfa488"/>`;
+  const ph=t*Math.PI*2*.95,sw=Math.sin(ph);
+  const smile=kf(t,[[0,.62],[2.6,.66],[3.4,1]]);
+  s+=ch('CH_Consumer',{x:820,y:1000,s:1.4,legF:26*sw,legB:-26*sw,armF:{s:-20*sw,e:14},armB:{s:20*sw,e:14},bob:-Math.abs(Math.cos(ph))*7,
+    head:kf(t,[[0,0],[2.4,0],[3.2,-8],[8,-6]]),tail:10*Math.sin(ph+1),smile,blink:(t%3.1)<.12?1:0});
+  const bo=eback(seg(t,2.2,2.8));
+  if(bo>0){
+    s+=`<g opacity="${f(clamp(bo))}"><circle cx="990" cy="480" r="${f(12*bo)}" fill="#fff"/><circle cx="1030" cy="420" r="${f(20*bo)}" fill="#fff"/>`+
+      `<g transform="translate(1260,280) scale(${f(bo)})"><ellipse rx="230" ry="150" fill="#fff"/><circle cx="-160" cy="-60" r="80" fill="#fff"/><circle cx="150" cy="-70" r="90" fill="#fff"/><circle cx="-120" cy="90" r="70" fill="#fff"/><circle cx="140" cy="90" r="70" fill="#fff"/>`;
+    const idx=Math.min(2,Math.floor(Math.max(0,t-2.6)/1.8)),lt=Math.max(0,t-2.6)-idx*1.8,pop=eback(seg(lt,0,.4));
+    s+=`<g transform="scale(${f(pop)})">${menuIcon(idx,0,-20,1.3)}</g>`+txt(0,110,L.menuIdeas[idx],44,'#6b4a36',800)+`</g></g>`;
+  }
+  return cam(s,1.02,960,540);
+}
+
+/* =========================================================
+   장면 6: 매장에서 고르기, 인사, 이름표 속 농부와 교차
+   ========================================================= */
+function S6(t,dur,id,L){
+  let s=storeBG(id,L);
+  const holdTom=t>=1.8;
+  const aS=kf(t,[[0,8],[1.2,62],[1.8,62],[2.8,72],[5.5,72],[6,40]]);
+  const aE=kf(t,[[0,10],[1.2,12],[1.8,12],[2.8,78],[5.5,78],[6,60]]);
+  const cSmile=kf(t,[[0,.7],[2.6,.75],[3.2,1],[4.6,.8],[5.2,1]]);
+  s+=ch('CH_Consumer',{x:560,y:1040,s:1.4,armF:{s:aS,e:aE},armB:{s:-6,e:14},bend:kf(t,[[0,0],[1.2,8],[2,0]]),head:kf(t,[[0,6],[1.4,10],[2.8,-4],[3.6,-2]]),smile:cSmile,
+    holdF:holdTom?veg('tomato',0,4,.7):'',tail:3*Math.sin(t*2)});
+  const wave=(t>3.0&&t<5.2)?Math.sin((t-3)*8)*12:0;
+  const sS=kf(t,[[0,10],[3,10],[3.4,150],[5,150],[5.4,20]]),sE=kf(t,[[0,10],[3,10],[3.4,25],[5,25],[5.4,40]]);
+  s+=ch('CH_Staff',{x:1380,y:1040,s:1.4,flip:true,armF:{s:sS+wave,e:sE},armB:{s:18,e:50},head:kf(t,[[0,0],[3.2,0],[3.6,10],[4,-2],[4.4,8],[4.8,0]]),smile:kf(t,[[0,.7],[3.2,1]])});
+  const items=[['tomato','tomato','tomato'],['lettuce','cabbage'],['carrot','potato','corn']];
+  const it=items.map((a,i)=>i===0&&holdTom?['tomato','tomato']:a);
+  s+=displayTable(700,1220,800,it,11);
+  s+=nameTag(L,760,808,.62,1,-3);
+  s+=bubble(1340,470,500,96,L.staffGreeting,ease(seg(t,3.3,3.7))*(1-ease(seg(t,5.6,6))),-1,40);
+  s+=bubble(620,440,360,96,L.consumerReply,ease(seg(t,4.4,4.8))*(1-ease(seg(t,5.6,6))),1,40);
+  // 교차: 이름표 → 농부
+  const cz=ease(seg(t,6,7));
+  if(cz>0){
+    s+=`<rect width="${W}" height="${H}" fill="#fff8ea" opacity="${f(.86*cz)}"/>`;
+    s+=nameTag(L,lerp(760,640,cz),lerp(808,470,cz),lerp(.62,2.1,cz),1,lerp(-3,0,cz));
+    const fz=eback(seg(t,7.2,8.1));
+    if(fz>0){
+      const cx=1330,cy=470,r=250;
+      s+=`<defs><clipPath id="${id}c"><circle cx="${cx}" cy="${cy}" r="${r*fz}"/></clipPath></defs><g clip-path="url(#${id}c)"><rect x="${cx-r}" y="${cy-r}" width="${2*r}" height="${2*r}" fill="#a9daf2"/><circle cx="${cx+150}" cy="${cy-160}" r="50" fill="#fff0b0"/>${'' }<rect x="${cx-r}" y="${cy+40}" width="${2*r}" height="${r}" fill="#88bd60"/>`;
+      for(let i=0;i<6;i++)s+=veg('lettuce',cx-r+40+i*90,cy+90,.6);
+      const wv=Math.sin(t*7)*14;
+      s+=ch('CH_Farmer',{x:cx-10,y:cy+300,s:.95,armF:{s:150+wv,e:20},armB:{s:-6,e:18},smile:1,head:-4})+veg('tomato',cx+140,cy+170,1.2)+`</g>`;
+      s+=`<circle cx="${cx}" cy="${cy}" r="${f(r*fz)}" fill="none" stroke="#5f9c50" stroke-width="10"/>`;
+      s+=`<g opacity="${f(ease(seg(t,8,8.6)))}">`+txt(cx,cy+r+70,L.farmerCaption,42,'#3f7d4c',800);
+      s+=`<path d="M880,470 C960,380 1020,560 1080,470" stroke="#e98a6b" stroke-width="6" stroke-dasharray="4 14" stroke-linecap="round" fill="none"/><path transform="translate(980,450) scale(1.8)" d="M0,6 C-12,-6 -6,-16 0,-8 C6,-16 12,-6 0,6Z" fill="#e98a6b"/></g>`;
+    }
+  }
+  return cam(s,1+.05*ease(seg(t,0,6)),960,640);
+}
+
+/* =========================================================
+   장면 7: 따뜻한 식탁, 함께하는 식사
+   ========================================================= */
+function S7(t,dur,id,L){
+  let s=`<defs>${grad(id+'wall',[[0,'#f6dcb4'],[1,'#e9c393']])}${glow(id+'lamp','#fff6d8','#ffd99a')}${grad(id+'win',[[0,'#2a3a6b'],[1,'#5a5f8f']])}</defs>`;
+  s+=`<rect width="${W}" height="${H}" fill="url(#${id}wall)"/>`;
+  s+=`<rect x="120" y="150" width="360" height="400" rx="10" fill="url(#${id}win)"/><circle cx="380" cy="240" r="34" fill="#fff4c8"/><circle cx="366" cy="232" r="30" fill="#4a4f80"/>`;
+  for(let i=0;i<10;i++)s+=sparkle(150+rnd(i)*300,180+rnd(i+5)*240,4+rnd(i+9)*4,.5+.5*Math.sin(t*3+i),'#fff');
+  s+=`<rect x="120" y="345" width="360" height="10" fill="#c79a6a"/><rect x="295" y="150" width="10" height="400" fill="#c79a6a"/><rect x="104" y="140" width="392" height="18" fill="#b98a5a"/><path d="M90,130 q40,200 10,440 h60 q-20,-240 -10,-440z" fill="#e98a6b" opacity=".85"/>`;
+  s+=`<rect x="1450" y="200" width="240" height="170" rx="6" fill="#fff8e8" stroke="#b98a5a" stroke-width="10"/>`+veg('tomato',1520,290,.8)+veg('carrot',1580,290,.8,20)+veg('cabbage',1630,290,.6);
+  s+=`<circle cx="960" cy="330" r="620" fill="url(#${id}lamp)" opacity=".75"/><path d="M960,0 V170" stroke="#5a4a3a" stroke-width="4"/><path d="M880,240 L920,170 h80 L1040,240Z" fill="#e7b24c"/><ellipse cx="960" cy="244" rx="82" ry="14" fill="#fff4c8"/>`;
+  // 의자
+  [690,960,1240].forEach(x=>s+=`<rect x="${x-80}" y="520" width="160" height="300" rx="20" fill="#9c6a40"/><rect x="${x-64}" y="540" width="128" height="40" rx="10" fill="#b57e4e"/>`);
+  const eat=(ph)=>{const c=(t+ph)%3.2,up=ease(seg(c,.4,.9))*(1-ease(seg(c,1.6,2.1)));return{s:lerp(48,70,up),e:lerp(44,137,up),up}};
+  const spoon=`<g><rect x="-3" y="-44" width="6" height="52" rx="3" fill="#d9d4c8"/><ellipse cy="-48" rx="8" ry="11" fill="#e5e0d4"/></g>`;
+  const a1=eat(0),a2=eat(1.4),a3=eat(2.3);
+  s+=ch('CH_Consumer',{x:690,y:1000,s:1.35,armF:{s:a1.s,e:a1.e},armB:{s:30,e:50},smile:a1.up>.5?.8:1,head:a1.up*6,holdF:spoon,bag:false});
+  s+=character({id:'CH_Child',x:960,y:960,s:1.02,skin:'#f6d2b6',hair:'#3a2a20',hairStyle:'bob',shirt:'#f2c14e',pants:'#6a7fa8',armF:{s:a3.s,e:a3.e},armB:{s:30,e:50},smile:a3.up>.5?.8:1,head:a3.up*6-4,holdF:spoon});
+  s+=character({id:'CH_Family',x:1240,y:1000,s:1.38,flip:true,skin:'#efc3a0',hair:'#2a2420',shirt:'#7c9b6d',pants:'#4a4a52',armF:{s:a2.s,e:a2.e},armB:{s:30,e:50},smile:a2.up>.5?.8:1,head:a2.up*6,holdF:spoon});
+  // 식탁
+  s+=`<rect x="340" y="770" width="1240" height="${H-770}" fill="#a86d3a"/><rect x="340" y="760" width="1240" height="30" rx="8" fill="#c8894f"/><rect x="560" y="760" width="800" height="${H-760}" fill="#f4efe3"/><path d="M560,800 h800 M560,850 h800" stroke="#e98a6b" stroke-width="6" opacity=".6"/>`;
+  const bowl=(x,y,fill,s=1)=>`<g transform="translate(${x},${y}) scale(${s})"><ellipse cy="-2" rx="46" ry="12" fill="${fill}"/><path d="M-48,0 h96 q-6,40 -48,42 q-42,-2 -48,-42z" fill="#fdfaf2" stroke="#e2d2b8" stroke-width="3"/><path d="M-40,14 h80" stroke="#8fbcd8" stroke-width="4"/></g>`;
+  s+=bowl(700,760,'#fff')+bowl(1220,760,'#fff')+bowl(980,752,'#fff',.8);
+  s+=`<g transform="translate(960,742)"><path d="M-90,0 h180 q-6,62 -90,64 q-84,-2 -90,-64z" fill="#6b4a36"/><ellipse rx="90" ry="20" fill="#d9763c"/>${veg('potato',-30,-6,.5)}${veg('cabbage',24,-6,.4)}${veg('carrot',50,-4,.35,80)}</g>`;
+  for(let i=0;i<3;i++){const c=((t*.5+i/3)%1),x=900+i*40,y=728-c*100;s+=`<path d="M${x},${f(y+60)} q-18,-20 0,-40 q18,-20 0,-40" stroke="#fff" stroke-width="7" fill="none" stroke-linecap="round" opacity="${f(Math.sin(Math.PI*c)*.75)}"/>`}
+  s+=`<g transform="translate(800,790)"><ellipse rx="80" ry="22" fill="#fdfaf2" stroke="#e2d2b8" stroke-width="3"/>${veg('lettuce',-20,-14,.6)}${veg('tomato',24,-12,.5)}${veg('tomato',4,-22,.45)}</g>`;
+  s+=`<g transform="translate(1120,790)"><ellipse rx="80" ry="22" fill="#fdfaf2" stroke="#e2d2b8" stroke-width="3"/>${veg('corn',-24,-16,.6,80)}${veg('potato',26,-12,.55)}</g>`;
+  if(t>5)for(let i=0;i<5;i++){const a=(t-5)*.6+i*1.3,x=480+i*240+Math.sin(a*2)*30,y=640-((t-5)*50+i*60)%420;s+=`<path transform="translate(${f(x)},${f(y)}) rotate(${f(a*50)})" d="M0,0 q12,-16 26,-6 q-10,16 -26,6z" fill="#7cc36a" opacity="${f(.55*Math.sin(Math.PI*clamp(((t-5)*50+i*60)%420/420)))}"/>`}
+  return cam(s,1+.07*ease(seg(t,0,dur)),960,600);
+}
+
+/* =========================================================
+   장면 8: 슬로건 + 매장명 (로고 파일 받기 전까지 텍스트)
+   ========================================================= */
+function S8(t,dur,id,L){
+  let s=`<rect width="${W}" height="${H}" fill="#fbf5e6"/>`;
+  s+=`<g transform="translate(960,1150) rotate(${f(t*2)})">`;
+  for(let i=0;i<24;i++)s+=`<path d="M0,0 L${f(1900*Math.cos(i*Math.PI/12))},${f(1900*Math.sin(i*Math.PI/12))} L${f(1900*Math.cos((i+.5)*Math.PI/12))},${f(1900*Math.sin((i+.5)*Math.PI/12))}Z" fill="#f5e6c3" opacity=".6"/>`;
+  s+=`</g>`;
+  const row=['cabbage','carrot','tomato','corn','potato','lettuce','tomato','eggplant','carrot','cabbage','tomato','corn','lettuce'];
+  row.forEach((v,i)=>{const k=eback(seg(t,.1+i*.12,.6+i*.12));if(k<=0)return;const x=180+i*130,y=1000-42*Math.sin(Math.PI*i/(row.length-1));s+=veg(v,x,y+(1-k)*80,1.45*k,(rnd(i)*30-15))});
+  const a1=ease(seg(t,1.2,2.2)),a2=ease(seg(t,1.8,2.8));
+  s+=`<g opacity="${f(a1)}" transform="translate(0,${f((1-a1)*30)})">`+txt(960,400,L.sloganLines[0],118,'#2f6b3a',800,'middle','letter-spacing="-2"')+`</g>`;
+  s+=`<g opacity="${f(a2)}" transform="translate(0,${f((1-a2)*30)})">`+txt(960,540,L.sloganLines[1],118,'#d9692f',800,'middle','letter-spacing="-2"')+`</g>`;
+  const a3=ease(seg(t,3.2,4.2));
+  s+=`<g opacity="${f(a3)}"><path d="M560,668 h120 M1240,668 h120" stroke="#b9a684" stroke-width="3"/>`+
+    `<path transform="translate(640,630) scale(1.1)" d="M0,20 q6,-30 32,-34 q-2,28 -32,34z" fill="#5fae4c"/>`+txt(960,686,L.storeName,58,'#4a3b2c',800)+`</g>`;
+  const themes=L.themes.map(x=>'#'+x.replace(/\s/g,''));
+  const widths=themes.map(x=>60+x.length*34),gap=24,tot=widths.reduce((a,b)=>a+b,0)+gap*(themes.length-1);
+  let cx=960-tot/2;
+  themes.forEach((x,i)=>{const k=eback(seg(t,4.4+i*.2,4.9+i*.2));if(k>0){const w=widths[i];
+    s+=`<g transform="translate(${f(cx+w/2)},790) scale(${f(k)})"><rect x="${-w/2}" y="-34" width="${w}" height="68" rx="34" fill="#fff" stroke="#9cc98a" stroke-width="3"/>`+txt(0,12,x,34,'#3f7d4c',700)+`</g>`}cx+=widths[i]+gap});
+  return s;
+}
+
+const FN={S1_dawn:S1,S2_farmer:S2,S3_route:S3,S4_display:S4,S5_walk:S5,S6_choose:S6,S7_table:S7,S8_slogan:S8};
+
+/* ---------- 타임라인 ---------- */
+window.init=function(cfg){
+  CFG=cfg;let acc=0;
+  SCENES=cfg.scenes.map(sc=>{const o=Object.assign({},sc,{start:acc});acc+=sc.duration;return o});
+  TOTAL=acc;
+  return {total:TOTAL,scenes:SCENES.map(s=>[s.id,s.start,s.duration])};
+};
+window.renderAt=function(t){
+  const cf=CFG.crossfade,L=CFG.labels;
+  let i=SCENES.findIndex(s=>t<s.start+s.duration);if(i<0)i=SCENES.length-1;
+  const cur=SCENES[i],prev=SCENES[i-1];
+  let html='';
+  const lt=t-cur.start;
+  if(prev&&lt<cf)html+=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice">${FN[prev.id](t-prev.start,prev.duration,'p'+prev.id,L)}</svg>`;
+  const op=prev&&lt<cf?ease(lt/cf):1;
+  html+=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid slice" style="opacity:${op.toFixed(3)}">${FN[cur.id](lt,cur.duration,'c'+cur.id,L)}</svg>`;
+  document.getElementById('layers').innerHTML=html;
+  const sub=document.getElementById('sub');
+  const so=cur.subtitle?ease(seg(lt,.5,1.0))*(1-ease(seg(lt,cur.duration-.55,cur.duration-.1))):0;
+  sub.textContent=cur.subtitle||'';
+  sub.style.opacity=so.toFixed(3);
+  sub.style.fontSize=(window.innerHeight*.046).toFixed(1)+'px';
+  document.getElementById('fade').style.opacity=(1-ease(seg(t,0,.9))).toFixed(3);
+};
+/* 브라우저에서 직접 열어 볼 때(http 서버): film.html?play */
+if(location.search.includes('play')){
+  fetch('config.json').then(r=>r.json()).then(c=>{init(c);const t0=performance.now();
+    const loop=()=>{const t=((performance.now()-t0)/1000)%TOTAL;renderAt(t);requestAnimationFrame(loop)};document.fonts.ready.then(loop)});
+}
+</script>
+</body>
+</html>
